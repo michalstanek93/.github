@@ -73,7 +73,7 @@ def stahni_text_rozhodnuti(url):
 def sumarizuj_gemini(text_rozhodnuti):
     """Zpracuje text pomocí Gemini API přesně podle požadovaného formátu."""
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    model = genai.GenerativeModel("gemini-2.5-flash")
 
     prompt = f"""
     Jsi špičkový právní analytik. Analyzuj následující rozhodnutí Nejvyššího soudu ČR 
