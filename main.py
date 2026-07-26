@@ -7,10 +7,8 @@ from email.mime.text import MIMEText
 
 import requests
 from bs4 import BeautifulSoup
-from openai import OpenAI
 
 # --- KONFIGURACE ZE ZABEZPEČENÝCH PROMĚNNÝCH GITHUB ---
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 EMAIL_SENDER = os.environ.get("EMAIL_SENDER")
 EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
 EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER")
@@ -20,88 +18,46 @@ SMTP_PORT = int(os.environ.get("SMTP_PORT", 587))
 TARGET_URL = "https://www.nsoud.cz/uredni-deska/obcanskopravni-a-obchodni-kolegium/vyhlasovana-rozhodnuti"
 
 
-def ziskej_rozhodnuti_za_posledni_dny(dny=7):
-    """Stáhne hlavní stránku úřední desky a vyhledá odkaz na nová rozhodnutí."""
+def ziskej_rozhodnuti():
+    """Stáhne hlavní stránku úřední desky a vytáhne seznam rozhodnutí a odkazů."""
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         )
     }
-    response = requests.get(TARGET_URL, headers=headers)
-    if response.status_code != 200:
-        print(f"Chyba při načítání stránky: {response.status_code}")
+    try:
+        response = requests.get(TARGET_URL, headers=headers, timeout=15)
+        if response.status_code != 200:
+            print(f"Chyba při načítání stránky: {response.status_code}")
+            return []
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        polozky = []
+
+        # Hledáme odkazy na nová rozhodnutí na úřední desce
+        for a_tag in soup.find_all("a", href=True):
+            href = a_tag["href"]
+            text = a_tag.get_text(strip=True)
+
+            if ("rozhodnuti" in href or "Judikatura" in href) and len(text) > 3:
+                full_url = (
+                    href
+                    if href.startswith("http")
+                    else f"https://www.nsoud.cz{href}"
+                )
+
+                # Zamezení duplicitám
+                if not any(p["url"] == full_url for p in polozky):
+                    polozky.append({"nazev": text, "url": full_url})
+
+        return položky[:15]
+    except Exception as e:
+        print(f"Chyba při stahování: {e}")
         return []
 
-    soup = BeautifulSoup(response.text, "html.parser")
 
-    odkazy = []
-    for a_tag in soup.find_all("a", href=True):
-        href = a_tag["href"]
-        if "rozhodnuti" in href or "Judikatura" in href:
-            full_url = href if href.startswith("http") else f"https://www.nsoud.cz{href}"
-            if full_url not in odkazy:
-                odkazy.append(full_url)
-
-    return odkazy[:10]
-
-
-def stahni_text_rozhodnuti(url):
-    """Stáhne text samotného rozhodnutí."""
-    try:
-        res = requests.get(
-            url,
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-                    " AppleWebKit/537.36"
-                )
-            },
-            timeout=15,
-        )
-        soup = BeautifulSoup(res.text, "html.parser")
-        for element in soup(["script", "style", "nav", "footer", "header"]):
-            element.extract()
-        text = soup.get_text(separator="\n")
-        lines = [line.strip() for line in text.splitlines() if line.strip()]
-        return "\n".join(lines)[:12000]
-    except Exception as e:
-        print(f"Chyba při stahování {url}: {e}")
-        return None
-
-
-def sumarizuj_openai(text_rozhodnuti):
-    """Zpracuje text pomocí ChatGPT (GPT-4o-mini)."""
-    client = OpenAI(api_key=OPENAI_API_KEY)
-
-    prompt = f"""
-    Jsi špičkový právní analytik. Analyzuj následující rozhodnutí Nejvyššího soudu ČR 
-    a připrav z něj výstup v přesně stanoveném formátu pro e-mailový přehled.
-
-    POŽADOVANÝ FORMÁT KAŽDÉHO SHRUNUTÍ:
-    ### [Nadpis vystihující hlavní témata a podstatu rozhodnutí]
-    * **Spisová značka:** [Doplň spisovou značku]
-    * **Dotčená oblast:** [Např. Obchodní právo / Náhrada škody / Smlouvy]
-    
-    **Stručné shrnutí nosných závěrů:**
-    [Napiš 3 až 5 výstižných bodů nebo odstavců vysvětlujících klíčové právní závěry Nejvyššího soudu a praktický dopad rozhodnutí.]
-
-    Text rozhodnutí k analýze:
-    {text_rozhodnuti}
-    """
-
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": "Jsi zkušený právní asistent."},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0.2
-    )
-    return response.choices[0].message.content
-
-
-def posli_email(obsah_html):
-    """Odešle výsledný e-mail."""
+def posli_email(polozky):
+    """Odešle přehledný HTML e-mail se seznamem rozhodnutí."""
     msg = MIMEMultipart("alternative")
     dnes = datetime.date.today().strftime("%d.%m.%Y")
     msg["Subject"] = Header(
@@ -110,17 +66,28 @@ def posli_email(obsah_html):
     msg["From"] = EMAIL_SENDER
     msg["To"] = EMAIL_RECEIVER
 
-    html_text = obsah_html.replace("\n", "<br>").replace("### ", "<h2>").replace("</h2><br>", "</h2>")
-    
+    # Sestavení řádků tabulky / seznamu
+    seznam_html = ""
+    for idx, item in enumerate(polozky, 1):
+        seznam_html += f"""
+        <li style="margin-bottom: 12px;">
+            <strong style="font-size: 15px;">{item['nazev']}</strong><br>
+            <a href="{item['url']}" style="color: #1a56db; text-decoration: underline;">Otevřít plné znění na NSoud.cz</a>
+        </li>
+        """
+
     body = f"""
     <html>
       <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-        <h1 style="color: #1a365d; border-bottom: 2px solid #1a365d; padding-bottom: 8px;">
-            Nová rozhodnutí Nejvyššího soudu ČR (7 dní)
-        </h1>
-        <p><i>Automatický přehled vyhlášených rozhodnutí za poslední týden.</i></p>
-        <hr>
-        {html_text}
+        <h2 style="color: #1a365d; border-bottom: 2px solid #1a365d; padding-bottom: 8px;">
+            Vyhlášená rozhodnutí Nejvyššího soudu ČR
+        </h2>
+        <p>Automatický přehled nově vyhlášených rozhodnutí k dnešnímu dni ({dnes}):</p>
+        <ol style="padding-left: 20px;">
+            {seznam_html}
+        </ol>
+        <hr style="border: none; border-top: 1px solid #ccc; margin-top: 20px;">
+        <p style="font-size: 12px; color: #666;">Odesláno automaticky ze skriptu GitHub Actions.</p>
       </body>
     </html>
     """
@@ -135,36 +102,22 @@ def posli_email(obsah_html):
 
 def main():
     if not ALL_CONFIGURED:
-        print("Chybí konfigurace API klíčů nebo e-mailu!")
+        print("Chybí konfigurace e-mailových údajů v GitHub Secrets!")
         return
 
-    print("Stahuji seznam nově vyhlášených rozhodnutí za 7 dní...")
-    odkazy = ziskej_rozhodnuti_za_posledni_dny(7)
+    print("Stahuji seznam nově vyhlášených rozhodnutí...")
+    polozky = ziskej_rozhodnuti()
 
-    if not odkazy:
-        print("Nenalezena žádná nová rozhodnutí.")
+    if not položky:
+        print("Nenalezena žádná rozhodnutí.")
         return
 
-    vysledna_shrnuti = []
-    for idx, url in enumerate(odkazy, 1):
-        print(f"Zpracovávám rozhodnutí {idx}/{len(odkazy)}: {url}")
-        text = stahni_text_rozhodnuti(url)
-        if text:
-            shrnuti = sumarizuj_openai(text)
-            vysledna_shrnuti.append(
-                f"{shrnuti}\n\n**Odkaz na plné znění:** [{url}]({url})\n<hr>"
-            )
-
-    if vysledna_shrnuti:
-        kompletni_obsah = "\n\n".join(vysledna_shrnuti)
-        print("Odesílám e-mail...")
-        posli_email(kompletni_obsah)
-        print("Hotovo, e-mail odeslán!")
+    print(f"Nalezeno {len(polozky)} rozhodnutí. Odesílám e-mail...")
+    posli_email(polozky)
+    print("Hotovo, e-mail byl úspěšně odeslán!")
 
 
-ALL_CONFIGURED = all(
-    [OPENAI_API_KEY, EMAIL_SENDER, EMAIL_PASSWORD, EMAIL_RECEIVER]
-)
+ALL_CONFIGURED = all([EMAIL_SENDER, EMAIL_PASSWORD, EMAIL_RECEIVER])
 
 if __name__ == "__main__":
     main()
