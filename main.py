@@ -5,12 +5,12 @@ from email.header import Header
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
-import google.generativeai as genai
 import requests
 from bs4 import BeautifulSoup
+from openai import OpenAI
 
 # --- KONFIGURACE ZE ZABEZPEČENÝCH PROMĚNNÝCH GITHUB ---
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 EMAIL_SENDER = os.environ.get("EMAIL_SENDER")
 EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
 EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER")
@@ -42,7 +42,6 @@ def ziskej_rozhodnuti_za_posledni_dny(dny=7):
             if full_url not in odkazy:
                 odkazy.append(full_url)
 
-    # Zpracujeme až 10 nejnovějších rozhodnutí za týden
     return odkazy[:10]
 
 
@@ -64,16 +63,15 @@ def stahni_text_rozhodnuti(url):
             element.extract()
         text = soup.get_text(separator="\n")
         lines = [line.strip() for line in text.splitlines() if line.strip()]
-        return "\n".join(lines)[:15000]
+        return "\n".join(lines)[:12000]
     except Exception as e:
         print(f"Chyba při stahování {url}: {e}")
         return None
 
 
-def sumarizuj_gemini(text_rozhodnuti):
-    """Zpracuje text pomocí Gemini API přesně podle požadovaného formátu."""
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-2.5-flash")
+def sumarizuj_openai(text_rozhodnuti):
+    """Zpracuje text pomocí ChatGPT (GPT-4o-mini)."""
+    client = OpenAI(api_key=OPENAI_API_KEY)
 
     prompt = f"""
     Jsi špičkový právní analytik. Analyzuj následující rozhodnutí Nejvyššího soudu ČR 
@@ -91,8 +89,15 @@ def sumarizuj_gemini(text_rozhodnuti):
     {text_rozhodnuti}
     """
 
-    response = model.generate_content(prompt)
-    return response.text
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "Jsi zkušený právní asistent."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0.2
+    )
+    return response.choices[0].message.content
 
 
 def posli_email(obsah_html):
@@ -145,7 +150,7 @@ def main():
         print(f"Zpracovávám rozhodnutí {idx}/{len(odkazy)}: {url}")
         text = stahni_text_rozhodnuti(url)
         if text:
-            shrnuti = sumarizuj_gemini(text)
+            shrnuti = sumarizuj_openai(text)
             vysledna_shrnuti.append(
                 f"{shrnuti}\n\n**Odkaz na plné znění:** [{url}]({url})\n<hr>"
             )
@@ -158,7 +163,7 @@ def main():
 
 
 ALL_CONFIGURED = all(
-    [GEMINI_API_KEY, EMAIL_SENDER, EMAIL_PASSWORD, EMAIL_RECEIVER]
+    [OPENAI_API_KEY, EMAIL_SENDER, EMAIL_PASSWORD, EMAIL_RECEIVER]
 )
 
 if __name__ == "__main__":
