@@ -50,7 +50,7 @@ def ziskej_rozhodnuti():
                 if not any(p["url"] == full_url for p in polozky):
                     polozky.append({"nazev": text, "url": full_url})
 
-        return položky[:15]
+        return polozky[:15]
     except Exception as e:
         print(f"Chyba při stahování: {e}")
         return []
@@ -66,7 +66,7 @@ def posli_email(polozky):
     msg["From"] = EMAIL_SENDER
     msg["To"] = EMAIL_RECEIVER
 
-    # Sestavení řádků tabulky / seznamu
+    # Sestavení řádků seznamu
     seznam_html = ""
     for idx, item in enumerate(polozky, 1):
         seznam_html += f"""
@@ -108,7 +108,7 @@ def main():
     print("Stahuji seznam nově vyhlášených rozhodnutí...")
     polozky = ziskej_rozhodnuti()
 
-    if not položky:
+    if not polozky:
         print("Nenalezena žádná rozhodnutí.")
         return
 
